@@ -885,9 +885,53 @@ void CpuClusterPairList::buildDirect(const CpuNeighborList& neighborList,
         for (int k = 0; k < clusters[b].size; k++)
             atomToBlock[clusters[b].atomIndex[k]] = b;
 
-    // Direct pair build: parallel over i-clusters.
-    // For each i-cluster, check ALL other clusters via BB distance.
-    // The O(N²) BB checks are cheap (~20 ops each, ~1106² total = 1.2M ops).
+    // Build cell list for O(N) pair search instead of O(N²).
+    // Cell size must account for BB half-widths: two clusters can interact if
+    // center distance < cutoff + maxHalfWidth_i + maxHalfWidth_j.
+    float maxHW = 0;
+    for (int b = 0; b < numBlocks; b++)
+        maxHW = max(maxHW, max(halfWX[b], max(halfWY[b], halfWZ[b])));
+    float cellSize = cutoff + 2*maxHW;  // ensures all interacting pairs are in neighboring cells
+    int ncx = 1, ncy = 1, ncz = 1;
+    if (usePeriodic) {
+        ncx = max(1, (int)floorf(bsx / cellSize));
+        ncy = max(1, (int)floorf(bsy / cellSize));
+        ncz = max(1, (int)floorf(bsz / cellSize));
+        // Ensure at least 3 cells per dimension for proper neighbor search
+        ncx = max(3, ncx); ncy = max(3, ncy); ncz = max(3, ncz);
+    } else {
+        // Non-periodic: compute bounding box
+        float minx = centerX[0], maxx = centerX[0];
+        float miny = centerY[0], maxy = centerY[0];
+        float minz = centerZ[0], maxz = centerZ[0];
+        for (int b = 1; b < numBlocks; b++) {
+            minx = min(minx, centerX[b]); maxx = max(maxx, centerX[b]);
+            miny = min(miny, centerY[b]); maxy = max(maxy, centerY[b]);
+            minz = min(minz, centerZ[b]); maxz = max(maxz, centerZ[b]);
+        }
+        float rangeX = maxx - minx + 0.01f;
+        float rangeY = maxy - miny + 0.01f;
+        float rangeZ = maxz - minz + 0.01f;
+        ncx = max(1, (int)ceilf(rangeX / cellSize));
+        ncy = max(1, (int)ceilf(rangeY / cellSize));
+        ncz = max(1, (int)ceilf(rangeZ / cellSize));
+    }
+    float invCellX = (float)ncx / (usePeriodic ? bsx : (ncx * cellSize));
+    float invCellY = (float)ncy / (usePeriodic ? bsy : (ncy * cellSize));
+    float invCellZ = (float)ncz / (usePeriodic ? bsz : (ncz * cellSize));
+
+    // Assign clusters to cells.
+    int ncells = ncx * ncy * ncz;
+    vector<vector<int>> cellClusters(ncells);
+    for (int b = 0; b < numBlocks; b++) {
+        int cx = (int)(centerX[b] * invCellX) % ncx;
+        int cy = (int)(centerY[b] * invCellY) % ncy;
+        int cz = (int)(centerZ[b] * invCellZ) % ncz;
+        if (cx < 0) cx += ncx; if (cy < 0) cy += ncy; if (cz < 0) cz += ncz;
+        cellClusters[cx * ncy * ncz + cy * ncz + cz].push_back(b);
+    }
+
+    // Direct pair build: parallel over i-clusters, cell-list search.
     int nBuildThreads = min(4, max(1, (int)thread::hardware_concurrency()));
     int biChunk = (numBlocks + nBuildThreads - 1) / nBuildThreads;
     vector<vector<ClusterPair>> threadPairs(nBuildThreads);
@@ -926,8 +970,28 @@ void CpuClusterPairList::buildDirect(const CpuNeighborList& neighborList,
                 myPairs.push_back(sp);
             }
 
-            // Check all other clusters (bj < bi for N3L).
-            for (int bj = 0; bj < bi; bj++) {
+            // Cell-list search: only check clusters in neighboring cells.
+            int cxi = (int)(centerX[bi] * invCellX) % ncx;
+            int cyi = (int)(centerY[bi] * invCellY) % ncy;
+            int czi = (int)(centerZ[bi] * invCellZ) % ncz;
+            if (cxi < 0) cxi += ncx; if (cyi < 0) cyi += ncy; if (czi < 0) czi += ncz;
+
+            for (int dcx = -1; dcx <= 1; dcx++)
+            for (int dcy = -1; dcy <= 1; dcy++)
+            for (int dcz = -1; dcz <= 1; dcz++) {
+                int nx, ny, nz;
+                if (usePeriodic) {
+                    nx = (cxi + dcx + ncx) % ncx;
+                    ny = (cyi + dcy + ncy) % ncy;
+                    nz = (czi + dcz + ncz) % ncz;
+                } else {
+                    nx = cxi + dcx; ny = cyi + dcy; nz = czi + dcz;
+                    if (nx < 0 || nx >= ncx || ny < 0 || ny >= ncy || nz < 0 || nz >= ncz)
+                        continue;
+                }
+                const auto& cell = cellClusters[nx * ncy * ncz + ny * ncz + nz];
+                for (int bj : cell) {
+                    if (bj >= bi) continue;  // N3L: only bj < bi
                 // BB distance check.
                 float ddx = centerX[bi] - centerX[bj];
                 float ddy = centerY[bi] - centerY[bj];
@@ -990,7 +1054,8 @@ void CpuClusterPairList::buildDirect(const CpuNeighborList& neighborList,
                 cp.exclusionMask = exclMask;
                 cp.jAtomMask = jActive;
                 myPairs.push_back(cp);
-            }
+                } // for bj in cell
+            } // for dcz (dcx and dcy are single-statement loops wrapping dcz)
 
             for (int idx : exclFlagged) exclFlat[idx] = 0;
         }

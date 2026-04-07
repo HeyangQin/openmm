@@ -12,7 +12,6 @@ jobs:
       - name: Checkout full repo
         uses: actions/checkout@v4
         with:
-          ref: pr/cluster-kernel-v2
           fetch-depth: 0
 
       - name: Setup Python
@@ -32,12 +31,12 @@ jobs:
       # ---------- STOCK (master) ----------
       - name: Build stock
         run: |
-          git checkout origin/master -- platforms/ CMakeLists.txt openmmapi/
+          git checkout origin/master
           mkdir -p build-stock && cd build-stock
           cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release
           make -j$(nproc) OpenMM OpenMMCPU
 
-      - name: Deploy & bench stock
+      - name: Bench stock
         working-directory: examples/benchmarks
         run: |
           OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")
@@ -46,15 +45,15 @@ jobs:
           echo "stock hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
           python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../stock_results.txt
 
-      # ---------- NL-PADDING-ONLY (bench/nl-padding-only) ----------
+      # ---------- NL-PADDING-ONLY ----------
       - name: Build nl-padding-only
         run: |
-          git checkout origin/bench/nl-padding-only -- platforms/cpu/src/CpuKernels.cpp
+          git checkout origin/bench/nl-padding-only
           rm -rf build-nlpad && mkdir build-nlpad && cd build-nlpad
           cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release
           make -j$(nproc) OpenMM OpenMMCPU
 
-      - name: Deploy & bench nl-padding-only
+      - name: Bench nl-padding-only
         working-directory: examples/benchmarks
         run: |
           OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")
@@ -63,15 +62,15 @@ jobs:
           echo "nl-padding hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
           python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../nlpad_results.txt
 
-      # ---------- FULL-PR (pr/cluster-kernel-v2) ----------
+      # ---------- FULL-PR ----------
       - name: Build full-pr
         run: |
-          git checkout pr/cluster-kernel-v2 -- platforms/ CMakeLists.txt openmmapi/
+          git checkout origin/pr/cluster-kernel-v2
           rm -rf build-full && mkdir build-full && cd build-full
           cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release
           make -j$(nproc) OpenMM OpenMMCPU
 
-      - name: Deploy & bench full-pr
+      - name: Bench full-pr
         working-directory: examples/benchmarks
         run: |
           OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")

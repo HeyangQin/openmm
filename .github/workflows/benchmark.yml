@@ -1,0 +1,96 @@
+name: CPU Benchmark (Stock vs PR)
+
+on:
+  workflow_dispatch:  # manual trigger
+  push:
+    branches: [pr/cluster-kernel-v2]
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need full history to checkout upstream master
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential cmake swig python3-dev python3-pip doxygen
+          pip3 install numpy
+
+      - name: CPU info
+        run: |
+          lscpu | grep -E "Model name|CPU\(s\)|Thread|MHz"
+          cat /proc/cpuinfo | grep "model name" | head -1
+          grep flags /proc/cpuinfo | head -1 | tr ' ' '\n' | grep -E "avx2|bmi2|fma" | sort -u
+
+      # Build stock (upstream master)
+      - name: Build stock (upstream master)
+        run: |
+          git checkout origin/master
+          mkdir build_stock && cd build_stock
+          cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=../install_stock
+          make -j$(nproc) OpenMM OpenMMCPU install
+          cd ..
+
+      # Build PR
+      - name: Build PR
+        run: |
+          git checkout ${{ github.sha }}
+          mkdir build_pr && cd build_pr
+          cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=../install_pr
+          make -j$(nproc) OpenMM OpenMMCPU install
+          cd ..
+
+      # Install Python bindings from stock build
+      - name: Install stock Python bindings
+        run: |
+          cd build_stock
+          make PythonInstall || true
+          cd ..
+
+      # Benchmark stock
+      - name: Benchmark stock
+        run: |
+          cd examples/benchmarks
+          export LD_LIBRARY_PATH=${{ github.workspace }}/install_stock/lib:${{ github.workspace }}/install_stock/lib/plugins
+          export OPENMM_PLUGIN_DIR=${{ github.workspace }}/install_stock/lib/plugins
+          echo "=== STOCK ==="
+          echo "OpenMMCPU.so hash: $(md5sum ${{ github.workspace }}/install_stock/lib/plugins/libOpenMMCPU.so | awk '{print $1}')"
+          python3 benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme --seconds=30 2>&1 | tee stock_results.txt
+          cd ../..
+
+      # Benchmark PR
+      - name: Benchmark PR
+        run: |
+          cd examples/benchmarks
+          export LD_LIBRARY_PATH=${{ github.workspace }}/install_pr/lib:${{ github.workspace }}/install_pr/lib/plugins
+          export OPENMM_PLUGIN_DIR=${{ github.workspace }}/install_pr/lib/plugins
+          echo "=== PR ==="
+          echo "OpenMMCPU.so hash: $(md5sum ${{ github.workspace }}/install_pr/lib/plugins/libOpenMMCPU.so | awk '{print $1}')"
+          python3 benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme --seconds=30 2>&1 | tee pr_results.txt
+          cd ../..
+
+      # Compare
+      - name: Compare results
+        run: |
+          echo "=== COMPARISON ==="
+          echo ""
+          echo "STOCK:"
+          grep -E "^test:|^ns_per_day:" examples/benchmarks/stock_results.txt
+          echo ""
+          echo "PR:"
+          grep -E "^test:|^ns_per_day:" examples/benchmarks/pr_results.txt
+
+      # Run tests
+      - name: Run tests (PR build)
+        run: |
+          cd build_pr
+          export LD_LIBRARY_PATH=${{ github.workspace }}/build_pr
+          export OPENMM_PLUGIN_DIR=${{ github.workspace }}/build_pr
+          for t in TestCpuEwald TestCpuPme TestCpuSettle TestCpuNeighborList TestCpuLangevinMiddleIntegrator; do
+            echo -n "$t: "
+            timeout 300 ./$t > /dev/null 2>&1 && echo "PASS" || echo "FAIL"
+          done

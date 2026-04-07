@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq build-essential cmake
+          sudo apt-get install -y -qq build-essential cmake doxygen swig
           pip install openmm numpy
 
       - name: CPU info

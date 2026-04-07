@@ -386,47 +386,11 @@ void CpuNonbondedForce::calculateDirectIxn(int numberOfAtoms, float* posq, const
         && neighborList != NULL && numberOfAtoms <= 30000
         && CpuNonbondedForceCluster::isSupported()) {
         neighborList->skipNeighborSearch = true;
-        // Auto-rebuild cluster pair list when atoms drift past half the padding.
+        // Always rebuild cluster pair list (no auto-rebuild / displacement check).
         float paddedCut = cutoffDistance * 1.08f;
-        float clusterPadding = paddedCut - cutoffDistance;
-        float halfPad2 = 0.25f * clusterPadding * clusterPadding;
-        int curGen = neighborList->getGeneration();
-        bool needClusterRebuild = !clusterPairListValid || curGen != lastNLGeneration;
-        if (curGen != lastNLGeneration)
-            lastNLGeneration = curGen;
-        stepsSinceClusterRebuild++;
-        if (!needClusterRebuild && stepsSinceClusterRebuild >= 4
-            && clusterRebuildPosq.size() == (size_t)(4*numberOfAtoms)) {
-            for (int i = 0; i < numberOfAtoms; i++) {
-                float dx = posq[4*i]   - clusterRebuildPosq[4*i];
-                float dy = posq[4*i+1] - clusterRebuildPosq[4*i+1];
-                float dz = posq[4*i+2] - clusterRebuildPosq[4*i+2];
-                if (dx*dx + dy*dy + dz*dz > halfPad2) {
-                    needClusterRebuild = true;
-                    break;
-                }
-            }
-            stepsSinceClusterRebuild = 0;
-        }
-        if (needClusterRebuild) {
-            clusterPairList.buildDirect(*neighborList, numberOfAtoms, posq,
-                                        atomParameters, exclusions,
-                                        paddedCut, periodicBoxVectors, periodic);
-            clusterPairListValid = true;
-            clusterRebuildPosq.assign(posq, posq + 4*numberOfAtoms);
-        } else {
-            // Update cluster positions from current posq.
-            auto& clusters = clusterPairList.getMutableClusters();
-            for (auto& c : clusters) {
-                for (int k = 0; k < c.size; k++) {
-                    int ai = c.atomIndex[k];
-                    c.x[k] = posq[4*ai];
-                    c.y[k] = posq[4*ai+1];
-                    c.z[k] = posq[4*ai+2];
-                    c.q[k] = posq[4*ai+3];
-                }
-            }
-        }
+        clusterPairList.buildDirect(*neighborList, numberOfAtoms, posq,
+                                    atomParameters, exclusions,
+                                    paddedCut, periodicBoxVectors, periodic);
         CpuNonbondedForceCluster::calculateDirectIxn(
             clusterPairList, posq, threadForce, totalEnergy, threads,
             cutoffDistance, periodic, periodicBoxVectors,

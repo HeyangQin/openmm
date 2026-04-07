@@ -28,7 +28,7 @@ jobs:
       - name: CPU info
         run: lscpu | grep "Model name"
 
-      # ---------- STOCK (master) ----------
+      # ---------- 1. STOCK (master) ----------
       - name: Build stock
         run: |
           git checkout origin/master
@@ -45,7 +45,7 @@ jobs:
           echo "stock hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
           python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../stock_results.txt
 
-      # ---------- NL-PADDING-ONLY ----------
+      # ---------- 2. NL-PADDING-ONLY ----------
       - name: Build nl-padding-only
         run: |
           git checkout origin/bench/nl-padding-only
@@ -62,7 +62,41 @@ jobs:
           echo "nl-padding hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
           python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../nlpad_results.txt
 
-      # ---------- FULL-PR ----------
+      # ---------- 3. CLUSTER + STOCK NL (0.25x) ----------
+      - name: Build cluster-stock-nlpad
+        run: |
+          git checkout origin/bench/cluster-stock-nlpad
+          rm -rf build-csnl && mkdir build-csnl && cd build-csnl
+          cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc) OpenMM OpenMMCPU
+
+      - name: Bench cluster-stock-nlpad
+        working-directory: examples/benchmarks
+        run: |
+          OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")
+          cp ../../build-csnl/libOpenMMCPU.so $OPENMM_LIBS/plugins/libOpenMMCPU.so
+          cp ../../build-csnl/libOpenMM.so $OPENMM_LIBS/libOpenMM.so
+          echo "cluster-stock-nlpad hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
+          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../csnl_results.txt
+
+      # ---------- 4. CLUSTER + WIDE NL, NO AUTO-REBUILD ----------
+      - name: Build cluster-no-autorebuild
+        run: |
+          git checkout origin/bench/cluster-no-autorebuild
+          rm -rf build-cnar && mkdir build-cnar && cd build-cnar
+          cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc) OpenMM OpenMMCPU
+
+      - name: Bench cluster-no-autorebuild
+        working-directory: examples/benchmarks
+        run: |
+          OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")
+          cp ../../build-cnar/libOpenMMCPU.so $OPENMM_LIBS/plugins/libOpenMMCPU.so
+          cp ../../build-cnar/libOpenMM.so $OPENMM_LIBS/libOpenMM.so
+          echo "cluster-no-autorebuild hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
+          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../cnar_results.txt
+
+      # ---------- 5. FULL-PR ----------
       - name: Build full-pr
         run: |
           git checkout origin/pr/cluster-kernel-v2
@@ -82,14 +116,17 @@ jobs:
       # ---------- COMPARE ----------
       - name: Compare results
         run: |
-          echo "=== STOCK ==="
-          grep -E "^test:|^ns_per_day:" stock_results.txt
-          echo ""
-          echo "=== NL-PADDING-ONLY ==="
-          grep -E "^test:|^ns_per_day:" nlpad_results.txt
-          echo ""
-          echo "=== FULL-PR ==="
-          grep -E "^test:|^ns_per_day:" fullpr_results.txt
+          for f in stock nlpad csnl cnar fullpr; do
+            case $f in
+              stock)  echo "=== STOCK ===" ;;
+              nlpad)  echo "=== NL-PADDING-ONLY ===" ;;
+              csnl)   echo "=== CLUSTER+STOCK-NL ===" ;;
+              cnar)   echo "=== CLUSTER+WIDE-NL+NO-AUTOREBUILD ===" ;;
+              fullpr) echo "=== FULL-PR ===" ;;
+            esac
+            grep -E "^test:|^ns_per_day:" ${f}_results.txt
+            echo ""
+          done
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -98,4 +135,6 @@ jobs:
           path: |
             stock_results.txt
             nlpad_results.txt
+            csnl_results.txt
+            cnar_results.txt
             fullpr_results.txt

@@ -601,13 +601,7 @@ void CpuCalcNonbondedForceKernel::initialize(const System& system, const Nonbond
         useSwitchingFunction = false;
     }
     else {
-        // Wider NL padding when cluster kernel will be used (CutoffPeriodic/Ewald/PME on AVX2).
-        // Reduces rebuild frequency to amortize cluster pair list build cost.
-        bool clusterWillActivate = CpuNonbondedForceCluster::isSupported() &&
-            system.getNumParticles() <= 30000 &&
-            (nonbondedMethod == CutoffPeriodic || nonbondedMethod == Ewald || nonbondedMethod == PME);
-        double nlPadding = clusterWillActivate ? 0.75*nonbondedCutoff : 0.25*nonbondedCutoff;
-        data.requestNeighborList(nonbondedCutoff, nlPadding, true, exclusions);
+        data.requestNeighborList(nonbondedCutoff, 0.25*nonbondedCutoff, true, exclusions);
         useSwitchingFunction = force.getUseSwitchingFunction();
         switchingDistance = force.getSwitchingDistance();
     }

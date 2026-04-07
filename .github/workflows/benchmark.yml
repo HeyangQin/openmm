@@ -8,20 +8,11 @@ on:
 jobs:
   benchmark:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        variant:
-          - name: stock
-            ref: master
-          - name: nl-padding-only
-            ref: bench/nl-padding-only
-          - name: full-pr
-            ref: pr/cluster-kernel-v2
     steps:
-      - name: Checkout
+      - name: Checkout full repo
         uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.variant.ref }}
+          ref: pr/cluster-kernel-v2
           fetch-depth: 0
 
       - name: Setup Python
@@ -38,32 +29,74 @@ jobs:
       - name: CPU info
         run: lscpu | grep "Model name"
 
-      - name: Build
+      # ---------- STOCK (master) ----------
+      - name: Build stock
         run: |
-          mkdir build && cd build
+          git checkout origin/master -- platforms/ CMakeLists.txt openmmapi/
+          mkdir -p build-stock && cd build-stock
           cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release
           make -j$(nproc) OpenMM OpenMMCPU
 
-      - name: Deploy
-        run: |
-          OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")
-          cp build/libOpenMMCPU.so $OPENMM_LIBS/plugins/libOpenMMCPU.so
-          cp build/libOpenMM.so $OPENMM_LIBS/libOpenMM.so
-          echo "${{ matrix.variant.name }} hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
-
-      - name: Benchmark
+      - name: Deploy & bench stock
         working-directory: examples/benchmarks
         run: |
-          echo "=== ${{ matrix.variant.name }} ==="
-          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../${{ matrix.variant.name }}_results.txt
+          OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")
+          cp ../../build-stock/libOpenMMCPU.so $OPENMM_LIBS/plugins/libOpenMMCPU.so
+          cp ../../build-stock/libOpenMM.so $OPENMM_LIBS/libOpenMM.so
+          echo "stock hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
+          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../stock_results.txt
 
-      - name: Results
+      # ---------- NL-PADDING-ONLY (bench/nl-padding-only) ----------
+      - name: Build nl-padding-only
         run: |
-          echo "=== ${{ matrix.variant.name }} ==="
-          grep -E "^test:|^ns_per_day:" ${{ matrix.variant.name }}_results.txt
+          git checkout origin/bench/nl-padding-only -- platforms/cpu/src/CpuKernels.cpp
+          rm -rf build-nlpad && mkdir build-nlpad && cd build-nlpad
+          cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc) OpenMM OpenMMCPU
+
+      - name: Deploy & bench nl-padding-only
+        working-directory: examples/benchmarks
+        run: |
+          OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")
+          cp ../../build-nlpad/libOpenMMCPU.so $OPENMM_LIBS/plugins/libOpenMMCPU.so
+          cp ../../build-nlpad/libOpenMM.so $OPENMM_LIBS/libOpenMM.so
+          echo "nl-padding hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
+          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../nlpad_results.txt
+
+      # ---------- FULL-PR (pr/cluster-kernel-v2) ----------
+      - name: Build full-pr
+        run: |
+          git checkout pr/cluster-kernel-v2 -- platforms/ CMakeLists.txt openmmapi/
+          rm -rf build-full && mkdir build-full && cd build-full
+          cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc) OpenMM OpenMMCPU
+
+      - name: Deploy & bench full-pr
+        working-directory: examples/benchmarks
+        run: |
+          OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")
+          cp ../../build-full/libOpenMMCPU.so $OPENMM_LIBS/plugins/libOpenMMCPU.so
+          cp ../../build-full/libOpenMM.so $OPENMM_LIBS/libOpenMM.so
+          echo "full-pr hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
+          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../fullpr_results.txt
+
+      # ---------- COMPARE ----------
+      - name: Compare results
+        run: |
+          echo "=== STOCK ==="
+          grep -E "^test:|^ns_per_day:" stock_results.txt
+          echo ""
+          echo "=== NL-PADDING-ONLY ==="
+          grep -E "^test:|^ns_per_day:" nlpad_results.txt
+          echo ""
+          echo "=== FULL-PR ==="
+          grep -E "^test:|^ns_per_day:" fullpr_results.txt
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.variant.name }}-results
-          path: ${{ matrix.variant.name }}_results.txt
+          name: ablation-results
+          path: |
+            stock_results.txt
+            nlpad_results.txt
+            fullpr_results.txt

@@ -1,4 +1,4 @@
-name: CPU Benchmark (Stock vs PR)
+name: CPU Benchmark (Ablation Study)
 
 on:
   workflow_dispatch:
@@ -8,10 +8,20 @@ on:
 jobs:
   benchmark:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        variant:
+          - name: stock
+            ref: origin/master
+          - name: nl-padding-only
+            ref: bench/nl-padding-only
+          - name: full-pr
+            ref: pr/cluster-kernel-v2
     steps:
-      - name: Checkout PR branch
+      - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ matrix.variant.ref }}
           fetch-depth: 0
 
       - name: Setup Python
@@ -26,66 +36,34 @@ jobs:
           pip install openmm numpy scipy
 
       - name: CPU info
-        run: |
-          lscpu | grep -E "Model name|CPU\(s\)|Thread|MHz"
-          grep flags /proc/cpuinfo | head -1 | tr ' ' '\n' | grep -E "avx2|bmi2|fma" | sort -u
+        run: lscpu | grep "Model name"
 
-      - name: Find pip openmm paths
-        id: paths
+      - name: Build
         run: |
-          OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")
-          echo "openmm_libs=$OPENMM_LIBS" >> $GITHUB_OUTPUT
-          echo "OpenMM libs: $OPENMM_LIBS"
-          ls $OPENMM_LIBS/plugins/
-
-      # Stock benchmark (pip openmm as-is)
-      - name: Benchmark stock
-        working-directory: examples/benchmarks
-        run: |
-          echo "=== STOCK ==="
-          md5sum ${{ steps.paths.outputs.openmm_libs }}/plugins/libOpenMMCPU.so | awk '{print "Stock hash:", $1}'
-          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 | tee ../../stock_results.txt
-
-      # Build PR
-      - name: Build PR
-        run: |
-          mkdir build_pr && cd build_pr
+          mkdir build && cd build
           cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release
           make -j$(nproc) OpenMM OpenMMCPU
 
-      # Deploy PR build (override pip DLLs)
-      - name: Deploy PR build
+      - name: Deploy
         run: |
-          OPENMM_LIBS="${{ steps.paths.outputs.openmm_libs }}"
-          cp build_pr/libOpenMMCPU.so $OPENMM_LIBS/plugins/libOpenMMCPU.so
-          cp build_pr/libOpenMM.so $OPENMM_LIBS/libOpenMM.so
-          echo "Stock hash:" && md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so.bak 2>/dev/null || true
-          echo "PR hash:" && md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so
+          OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")
+          cp build/libOpenMMCPU.so $OPENMM_LIBS/plugins/libOpenMMCPU.so
+          cp build/libOpenMM.so $OPENMM_LIBS/libOpenMM.so
+          echo "${{ matrix.variant.name }} hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
 
-      # PR benchmark
-      - name: Benchmark PR
+      - name: Benchmark
         working-directory: examples/benchmarks
         run: |
-          echo "=== PR ==="
-          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 | tee ../../pr_results.txt
+          echo "=== ${{ matrix.variant.name }} ==="
+          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../${{ matrix.variant.name }}_results.txt
 
-      # Compare
-      - name: Compare results
+      - name: Results
         run: |
-          echo "=== STOCK ==="
-          grep -E "^test:|^ns_per_day:" stock_results.txt || echo "no stock results"
-          echo ""
-          echo "=== PR ==="
-          grep -E "^test:|^ns_per_day:" pr_results.txt || echo "no PR results"
+          echo "=== ${{ matrix.variant.name }} ==="
+          grep -E "^test:|^ns_per_day:" ${{ matrix.variant.name }}_results.txt
 
-      # Tests
-      - name: Run tests (PR)
-        run: |
-          cd build_pr
-          export LD_LIBRARY_PATH=$(pwd)
-          export OPENMM_PLUGIN_DIR=$(pwd)
-          for t in TestCpuEwald TestCpuPme TestCpuSettle TestCpuNeighborList TestCpuLangevinMiddleIntegrator; do
-            make -j$(nproc) $t > /dev/null 2>&1
-            echo -n "$t: "
-            timeout 300 ./$t > /dev/null 2>&1 && echo "PASS" || echo "FAIL"
-          done
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.variant.name }}-results
+          path: ${{ matrix.variant.name }}_results.txt

@@ -383,7 +383,8 @@ void CpuNonbondedForce::calculateDirectIxn(int numberOfAtoms, float* posq, const
     // Scope: periodic + cutoff + orthorhombic, excludes LJPME.
     bool clusterUsed = false;
     if (!ljpme && cutoff && periodic && !triclinic
-        && neighborList != NULL && CpuNonbondedForceCluster::isSupported()) {
+        && neighborList != NULL && numberOfAtoms <= 30000
+        && CpuNonbondedForceCluster::isSupported()) {
         neighborList->skipNeighborSearch = true;
         // Auto-rebuild cluster pair list when atoms drift past half the padding.
         float paddedCut = cutoffDistance * 1.08f;

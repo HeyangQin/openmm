@@ -1,0 +1,69 @@
+name: CPU Benchmark (Ablation Study)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [pr/cluster-kernel-v2]
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        variant:
+          - name: stock
+            ref: origin/master
+          - name: nl-padding-only
+            ref: bench/nl-padding-only
+          - name: full-pr
+            ref: pr/cluster-kernel-v2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.variant.ref }}
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential cmake doxygen swig
+          pip install openmm numpy scipy
+
+      - name: CPU info
+        run: lscpu | grep "Model name"
+
+      - name: Build
+        run: |
+          mkdir build && cd build
+          cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc) OpenMM OpenMMCPU
+
+      - name: Deploy
+        run: |
+          OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")
+          cp build/libOpenMMCPU.so $OPENMM_LIBS/plugins/libOpenMMCPU.so
+          cp build/libOpenMM.so $OPENMM_LIBS/libOpenMM.so
+          echo "${{ matrix.variant.name }} hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
+
+      - name: Benchmark
+        working-directory: examples/benchmarks
+        run: |
+          echo "=== ${{ matrix.variant.name }} ==="
+          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../${{ matrix.variant.name }}_results.txt
+
+      - name: Results
+        run: |
+          echo "=== ${{ matrix.variant.name }} ==="
+          grep -E "^test:|^ns_per_day:" ${{ matrix.variant.name }}_results.txt
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.variant.name }}-results
+          path: ${{ matrix.variant.name }}_results.txt

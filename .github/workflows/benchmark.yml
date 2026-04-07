@@ -44,7 +44,7 @@ jobs:
         run: |
           echo "=== STOCK ==="
           md5sum ${{ steps.paths.outputs.openmm_libs }}/plugins/libOpenMMCPU.so | awk '{print "Stock hash:", $1}'
-          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme --seconds=30 | tee ../../stock_results.txt
+          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 | tee ../../stock_results.txt
 
       # Build PR
       - name: Build PR
@@ -67,7 +67,7 @@ jobs:
         working-directory: examples/benchmarks
         run: |
           echo "=== PR ==="
-          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme --seconds=30 | tee ../../pr_results.txt
+          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 | tee ../../pr_results.txt
 
       # Compare
       - name: Compare results

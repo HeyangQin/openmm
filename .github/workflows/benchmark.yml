@@ -12,7 +12,7 @@ jobs:
       matrix:
         variant:
           - name: stock
-            ref: origin/master
+            ref: master
           - name: nl-padding-only
             ref: bench/nl-padding-only
           - name: full-pr

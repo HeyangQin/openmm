@@ -600,7 +600,7 @@ void CpuCalcNonbondedForceKernel::initialize(const System& system, const Nonbond
         useSwitchingFunction = false;
     }
     else {
-        data.requestNeighborList(nonbondedCutoff, 0.25*nonbondedCutoff, true, exclusions);
+        data.requestNeighborList(nonbondedCutoff, 0.75*nonbondedCutoff, true, exclusions);
         useSwitchingFunction = force.getUseSwitchingFunction();
         switchingDistance = force.getSwitchingDistance();
     }
@@ -1224,7 +1224,7 @@ void CpuCalcCustomNonbondedForceKernel::initialize(const System& system, const C
         useSwitchingFunction = false;
     }
     else {
-        data.requestNeighborList(nonbondedCutoff, 0.25*nonbondedCutoff, true, exclusions);
+        data.requestNeighborList(nonbondedCutoff, 0.75*nonbondedCutoff, true, exclusions);
         useSwitchingFunction = force.getUseSwitchingFunction();
         switchingDistance = force.getSwitchingDistance();
     }

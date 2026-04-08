@@ -613,6 +613,9 @@ void CpuNeighborList::threadComputeNeighborList(ThreadPool& threads, int threadI
     vector<int> blockAtoms;
     vector<float> blockAtomX(blockSize), blockAtomY(blockSize), blockAtomZ(blockSize);
     vector<VoxelIndex> atomVoxelIndex;
+    // Flat array for exclusion flags — avoids unordered_map heap allocations per block.
+    vector<BlockExclusionMask> atomFlagsFlat(numAtoms, 0);
+    vector<int> flaggedAtoms;
     while (true) {
         int i = atomicCounter++;
         if (i >= numBlocks)
@@ -650,26 +653,25 @@ void CpuNeighborList::threadComputeNeighborList(ThreadPool& threads, int threadI
 
         // Record the exclusions for this block.
 
-        unordered_map<int, BlockExclusionMask> atomFlags;
-        atomFlags.reserve(atomsInBlock*2);
+        flaggedAtoms.resize(0);
         for (int j = 0; j < atomsInBlock; j++) {
             const set<int>& atomExclusions = (*exclusions)[sortedAtoms[firstIndex+j]];
             const BlockExclusionMask mask = 1<<j;
             for (int exclusion : atomExclusions) {
-                const auto thisAtomFlags = atomFlags.find(exclusion);
-                if (thisAtomFlags == atomFlags.end())
-                    atomFlags[exclusion] = mask;
-                else
-                    thisAtomFlags->second |= mask;
+                if (atomFlagsFlat[exclusion] == 0)
+                    flaggedAtoms.push_back(exclusion);
+                atomFlagsFlat[exclusion] |= mask;
             }
         }
         int numNeighbors = blockNeighbors[i].size();
         for (int k = 0; k < numNeighbors; k++) {
             int atomIndex = blockNeighbors[i][k];
-            auto thisAtomFlags = atomFlags.find(atomIndex);
-            if (thisAtomFlags != atomFlags.end())
-                blockExclusions[i][k] |= thisAtomFlags->second;
+            if (atomFlagsFlat[atomIndex] != 0)
+                blockExclusions[i][k] |= atomFlagsFlat[atomIndex];
         }
+        // Clear only the entries we set.
+        for (int idx : flaggedAtoms)
+            atomFlagsFlat[idx] = 0;
     }
 }
 

@@ -8,6 +8,7 @@ on:
 jobs:
   benchmark:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - name: Checkout full repo
         uses: actions/checkout@v4
@@ -28,7 +29,7 @@ jobs:
       - name: CPU info
         run: lscpu | grep "Model name"
 
-      # ---------- 1. STOCK (master) ----------
+      # ---------- 1. STOCK ----------
       - name: Build stock
         run: |
           git checkout origin/master
@@ -45,24 +46,58 @@ jobs:
           echo "stock hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
           python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../stock_results.txt
 
-      # ---------- 2. NL-PADDING-ONLY ----------
-      - name: Build nl-padding-only
+      # ---------- 2. FLAT EXCLUSION FLAGS (14 lines) ----------
+      - name: Build flat-exclusion
         run: |
-          git checkout origin/bench/nl-padding-only
-          rm -rf build-nlpad && mkdir build-nlpad && cd build-nlpad
+          git checkout origin/bench/flat-exclusion-flags
+          rm -rf build-flatex && mkdir build-flatex && cd build-flatex
           cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release
           make -j$(nproc) OpenMM OpenMMCPU
 
-      - name: Bench nl-padding-only
+      - name: Bench flat-exclusion
         working-directory: examples/benchmarks
         run: |
           OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")
-          cp ../../build-nlpad/libOpenMMCPU.so $OPENMM_LIBS/plugins/libOpenMMCPU.so
-          cp ../../build-nlpad/libOpenMM.so $OPENMM_LIBS/libOpenMM.so
-          echo "nl-padding hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
-          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../nlpad_results.txt
+          cp ../../build-flatex/libOpenMMCPU.so $OPENMM_LIBS/plugins/libOpenMMCPU.so
+          cp ../../build-flatex/libOpenMM.so $OPENMM_LIBS/libOpenMM.so
+          echo "flat-exclusion hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
+          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../flatex_results.txt
 
-      # ---------- 3. CLUSTER + STOCK NL (0.25x) ----------
+      # ---------- 3. FMA FOR EXISTING KERNELS (2 lines) ----------
+      - name: Build fma-existing
+        run: |
+          git checkout origin/bench/fma-existing-kernels
+          rm -rf build-fma && mkdir build-fma && cd build-fma
+          cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc) OpenMM OpenMMCPU
+
+      - name: Bench fma-existing
+        working-directory: examples/benchmarks
+        run: |
+          OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")
+          cp ../../build-fma/libOpenMMCPU.so $OPENMM_LIBS/plugins/libOpenMMCPU.so
+          cp ../../build-fma/libOpenMM.so $OPENMM_LIBS/libOpenMM.so
+          echo "fma-existing hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
+          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../fma_results.txt
+
+      # ---------- 4. BOTH STANDALONE (16 lines) ----------
+      - name: Build standalone-opts
+        run: |
+          git checkout origin/bench/standalone-opts
+          rm -rf build-standalone && mkdir build-standalone && cd build-standalone
+          cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc) OpenMM OpenMMCPU
+
+      - name: Bench standalone-opts
+        working-directory: examples/benchmarks
+        run: |
+          OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")
+          cp ../../build-standalone/libOpenMMCPU.so $OPENMM_LIBS/plugins/libOpenMMCPU.so
+          cp ../../build-standalone/libOpenMM.so $OPENMM_LIBS/libOpenMM.so
+          echo "standalone-opts hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
+          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../standalone_results.txt
+
+      # ---------- 5. CLUSTER + STOCK NL ----------
       - name: Build cluster-stock-nlpad
         run: |
           git checkout origin/bench/cluster-stock-nlpad
@@ -79,24 +114,7 @@ jobs:
           echo "cluster-stock-nlpad hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
           python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../csnl_results.txt
 
-      # ---------- 4. CLUSTER + WIDE NL, NO AUTO-REBUILD ----------
-      - name: Build cluster-no-autorebuild
-        run: |
-          git checkout origin/bench/cluster-no-autorebuild
-          rm -rf build-cnar && mkdir build-cnar && cd build-cnar
-          cmake .. -DOPENMM_BUILD_CPU_LIB=ON -DCMAKE_BUILD_TYPE=Release
-          make -j$(nproc) OpenMM OpenMMCPU
-
-      - name: Bench cluster-no-autorebuild
-        working-directory: examples/benchmarks
-        run: |
-          OPENMM_LIBS=$(python -c "import os, openmm; print(os.path.join(os.path.dirname(openmm.__file__), '..', 'OpenMM.libs', 'lib'))")
-          cp ../../build-cnar/libOpenMMCPU.so $OPENMM_LIBS/plugins/libOpenMMCPU.so
-          cp ../../build-cnar/libOpenMM.so $OPENMM_LIBS/libOpenMM.so
-          echo "cluster-no-autorebuild hash: $(md5sum $OPENMM_LIBS/plugins/libOpenMMCPU.so | awk '{print $1}')"
-          python -u benchmark.py --platform=CPU --test=gbsa,rf,pme,apoa1rf,apoa1pme,apoa1ljpme,amoebagk,amber20-dhfr --seconds=30 2>&1 | tee ../../cnar_results.txt
-
-      # ---------- 5. FULL-PR ----------
+      # ---------- 6. FULL-PR ----------
       - name: Build full-pr
         run: |
           git checkout origin/pr/cluster-kernel-v2
@@ -116,13 +134,14 @@ jobs:
       # ---------- COMPARE ----------
       - name: Compare results
         run: |
-          for f in stock nlpad csnl cnar fullpr; do
+          for f in stock flatex fma standalone csnl fullpr; do
             case $f in
-              stock)  echo "=== STOCK ===" ;;
-              nlpad)  echo "=== NL-PADDING-ONLY ===" ;;
-              csnl)   echo "=== CLUSTER+STOCK-NL ===" ;;
-              cnar)   echo "=== CLUSTER+WIDE-NL+NO-AUTOREBUILD ===" ;;
-              fullpr) echo "=== FULL-PR ===" ;;
+              stock)      echo "=== 1. STOCK (baseline) ===" ;;
+              flatex)     echo "=== 2. FLAT EXCLUSION FLAGS (14 lines) ===" ;;
+              fma)        echo "=== 3. FMA EXISTING KERNELS (2 lines) ===" ;;
+              standalone) echo "=== 4. BOTH STANDALONE (16 lines) ===" ;;
+              csnl)       echo "=== 5. CLUSTER + STOCK NL (~2020 lines) ===" ;;
+              fullpr)     echo "=== 6. FULL PR (~2050 lines) ===" ;;
             esac
             grep -E "^test:|^ns_per_day:" ${f}_results.txt
             echo ""
@@ -132,9 +151,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ablation-results
-          path: |
-            stock_results.txt
-            nlpad_results.txt
-            csnl_results.txt
-            cnar_results.txt
-            fullpr_results.txt
+          path: "*_results.txt"
